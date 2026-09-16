@@ -233594,42 +233594,50 @@ var init_EffectTable = __esmMin((() => {
 		349: [{
 			type: "WATERFALL",
 			variant: "large",
-			vertical: false
+			vertical: false,
+			height: 80
 		}],
 		350: [{
 			type: "WATERFALL",
 			variant: "large",
-			vertical: true
+			vertical: true,
+			height: 80
 		}],
 		351: [{
 			type: "WATERFALL",
 			variant: "small",
-			vertical: false
+			vertical: false,
+			height: 30
 		}],
 		352: [{
 			type: "WATERFALL",
 			variant: "small",
-			vertical: true
+			vertical: true,
+			height: 30
 		}],
 		353: [{
 			type: "WATERFALL",
 			variant: "dark-large",
-			vertical: false
+			vertical: false,
+			height: 80
 		}],
 		354: [{
 			type: "WATERFALL",
 			variant: "dark-large",
-			vertical: true
+			vertical: true,
+			height: 80
 		}],
 		355: [{
 			type: "WATERFALL",
 			variant: "dark-small",
-			vertical: false
+			vertical: false,
+			height: 30
 		}],
 		356: [{
 			type: "WATERFALL",
 			variant: "dark-small",
-			vertical: true
+			vertical: true,
+			height: 30
 		}],
 		361: [{
 			type: "3D",
@@ -244744,13 +244752,48 @@ var init_WaterfallEffect$1 = __esmMin((() => {
 }));
 //#endregion
 //#region src/Renderer/Effects/WaterfallEffect.js
+function loadTextures(gl, textureSet, effect) {
+	let cache = _textureCache.get(textureSet);
+	if (!cache) {
+		cache = {
+			textures: new Array(TEXTURE_COUNT),
+			waiters: /* @__PURE__ */ new Set(),
+			ready: false,
+			active: true
+		};
+		_textureCache.set(textureSet, cache);
+		const texturePrefix = `waterfall${textureSet}`;
+		for (let index = 1; index <= TEXTURE_COUNT; index++) Client.loadFile(`data/texture/effect/${texturePrefix}${index}.tga`, (buffer) => {
+			WebGL_default.texture(gl, buffer, (texture) => {
+				if (!cache.active) {
+					gl.deleteTexture(texture);
+					return;
+				}
+				cache.textures[index - 1] = texture;
+				if (cache.textures.every(Boolean)) {
+					cache.ready = true;
+					cache.waiters.forEach((waiter) => {
+						waiter.textures = cache.textures;
+						waiter.ready = true;
+					});
+					cache.waiters.clear();
+				}
+			});
+		});
+	}
+	if (cache.ready) {
+		effect.textures = cache.textures;
+		effect.ready = true;
+	} else cache.waiters.add(effect);
+	return cache;
+}
 function getStyle(variant) {
 	return {
 		small: variant.includes("small"),
 		textureSet: variant.includes("dark") ? 3 : 1
 	};
 }
-var mat4$5, _matrix$1, SEGMENT_COUNT, TEXTURE_COUNT, SEGMENT_HEIGHT, EFFECT_TICK_MS, OPACITY, _program$6, WaterfallEffect;
+var mat4$5, _matrix$1, SEGMENT_COUNT, TEXTURE_COUNT, SEGMENT_HEIGHT, EFFECT_TICK_MS, OPACITY, _program$6, _textureCache, WaterfallEffect;
 var init_WaterfallEffect = __esmMin((() => {
 	init_WebGL();
 	init_gl_matrix();
@@ -244764,14 +244807,17 @@ var init_WaterfallEffect = __esmMin((() => {
 	SEGMENT_HEIGHT = 8;
 	EFFECT_TICK_MS = 24;
 	OPACITY = 120 / 255;
+	_textureCache = /* @__PURE__ */ new Map();
 	WaterfallEffect = class {
 		constructor(effect, instance, init) {
 			const style = getStyle(effect.variant);
 			this.position = instance.position;
 			this.startTick = instance.startTick;
 			this.small = style.small;
+			this.height = effect.height;
 			this.textureSet = style.textureSet;
 			this.textures = [];
+			this.textureCache = null;
 			this.buffer = null;
 			this.vertical = effect.vertical;
 			this.ready = false;
@@ -244784,13 +244830,7 @@ var init_WaterfallEffect = __esmMin((() => {
 		*/
 		init(gl) {
 			this.buffer = gl.createBuffer();
-			const texturePrefix = `waterfall${this.textureSet}`;
-			for (let index = 1; index <= TEXTURE_COUNT; index++) Client.loadFile(`data/texture/effect/${texturePrefix}${index}.tga`, (buffer) => {
-				WebGL_default.texture(gl, buffer, (texture) => {
-					this.textures[index - 1] = texture;
-					if (this.textures.filter(Boolean).length === TEXTURE_COUNT) this.ready = true;
-				});
-			});
+			this.textureCache = loadTextures(gl, this.textureSet, this);
 		}
 		render(gl, tick) {
 			const uniform = _program$6.uniform;
@@ -244806,7 +244846,7 @@ var init_WaterfallEffect = __esmMin((() => {
 			const process = Math.floor((tick - this.startTick) / EFFECT_TICK_MS);
 			gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
 			for (let band = 0; band < 4; band++) {
-				const cycleLength = this.small ? 30 - band * 6 : 80 - band * 13;
+				const cycleLength = this.height - band * (this.small ? 6 : 13);
 				const scroll = process % cycleLength * SEGMENT_HEIGHT / cycleLength;
 				const crop = scroll / SEGMENT_HEIGHT;
 				const phase = Math.floor(process % (TEXTURE_COUNT * cycleLength) / cycleLength);
@@ -244862,7 +244902,15 @@ var init_WaterfallEffect = __esmMin((() => {
 		* @param {WebGLRenderingContext} gl
 		*/
 		free(gl) {
-			if (this.buffer) gl.deleteBuffer(this.buffer);
+			if (this.textureCache) {
+				this.textureCache.waiters.delete(this);
+				this.textureCache = null;
+			}
+			if (this.buffer) {
+				gl.deleteBuffer(this.buffer);
+				this.buffer = null;
+			}
+			this.textures = [];
 			this.ready = false;
 		}
 		/**
@@ -244919,6 +244967,14 @@ var init_WaterfallEffect = __esmMin((() => {
 		* @param {WebGLRenderingContext} gl
 		*/
 		static free(gl) {
+			_textureCache.forEach((cache) => {
+				cache.active = false;
+				cache.textures.forEach((texture) => {
+					if (texture) gl.deleteTexture(texture);
+				});
+				cache.waiters.clear();
+			});
+			_textureCache.clear();
 			if (_program$6) gl.deleteProgram(_program$6);
 			_program$6 = null;
 			this.ready = false;
@@ -298011,12 +298067,22 @@ function invalidErr(string, message) {
 }
 function internalCalculateObjectSize(object, serializeFunctions, ignoreUndefined) {
 	const objectStack = [{
-		obj: object,
-		ignoreUndefined: ignoreUndefined ?? false
+		object,
+		ignoreUndefined: ignoreUndefined ?? false,
+		exit: false
 	}];
+	const path = /* @__PURE__ */ new Set();
 	let total = 0;
 	while (objectStack.length > 0) {
-		const { obj, ignoreUndefined: frameIgnoreUndefined } = objectStack.pop();
+		const frame = objectStack.pop();
+		if (frame.exit) {
+			path.delete(frame.object);
+			continue;
+		}
+		const { object: obj, ignoreUndefined: frameIgnoreUndefined } = frame;
+		path.add(obj);
+		frame.exit = true;
+		objectStack.push(frame);
 		total += 5;
 		const isObjArray = Array.isArray(obj);
 		const isObjMap = !isObjArray && (obj instanceof Map || isMap(obj));
@@ -298024,13 +298090,13 @@ function internalCalculateObjectSize(object, serializeFunctions, ignoreUndefined
 		if (!isObjArray && !isObjMap && typeof obj?.toBSON === "function") target = obj.toBSON();
 		if (isObjArray) {
 			const array = target;
-			for (let i = 0; i < array.length; i++) total += calculateElementSize(i.toString(), array[i], serializeFunctions, true, frameIgnoreUndefined, objectStack);
-		} else if (isObjMap) for (const [key, value] of target) total += calculateElementSize(key, value, serializeFunctions, false, frameIgnoreUndefined, objectStack);
-		else for (const key of Object.keys(target)) total += calculateElementSize(key, target[key], serializeFunctions, false, frameIgnoreUndefined, objectStack);
+			for (let i = 0; i < array.length; i++) total += calculateElementSize(i.toString(), array[i], serializeFunctions, true, frameIgnoreUndefined, objectStack, path);
+		} else if (isObjMap) for (const [key, value] of target) total += calculateElementSize(key, value, serializeFunctions, false, frameIgnoreUndefined, objectStack, path);
+		else for (const key of Object.keys(target)) total += calculateElementSize(key, target[key], serializeFunctions, false, frameIgnoreUndefined, objectStack, path);
 	}
 	return total;
 }
-function calculateElementSize(name, value, serializeFunctions = false, isArray = false, ignoreUndefined = false, objectStack) {
+function calculateElementSize(name, value, serializeFunctions = false, isArray = false, ignoreUndefined = false, objectStack, path) {
 	if (typeof value?.toBSON === "function") value = value.toBSON();
 	switch (typeof value) {
 		case "string": return 1 + ByteUtils.utf8ByteLength(name) + 1 + 4 + ByteUtils.utf8ByteLength(value) + 1;
@@ -298052,9 +298118,11 @@ function calculateElementSize(name, value, serializeFunctions = false, isArray =
 		else if (value._bsontype === "Int32") return ByteUtils.utf8ByteLength(name) + 1 + 5;
 		else if (value._bsontype === "Code") {
 			if (value.scope != null && Object.keys(value.scope).length > 0) {
+				if (path.has(value.scope)) throw new BSONError("Cannot convert circular structure to BSON");
 				objectStack.push({
-					obj: value.scope,
-					ignoreUndefined
+					object: value.scope,
+					ignoreUndefined,
+					exit: false
 				});
 				return ByteUtils.utf8ByteLength(name) + 1 + 1 + 4 + 4 + ByteUtils.utf8ByteLength(value.code.toString()) + 1;
 			} else return ByteUtils.utf8ByteLength(name) + 1 + 1 + 4 + ByteUtils.utf8ByteLength(value.code.toString()) + 1;
@@ -298070,16 +298138,19 @@ function calculateElementSize(name, value, serializeFunctions = false, isArray =
 			}, value.fields);
 			if (value.db != null) ordered_values["$db"] = value.db;
 			objectStack.push({
-				obj: ordered_values,
-				ignoreUndefined: true
+				object: ordered_values,
+				ignoreUndefined: true,
+				exit: false
 			});
 			return ByteUtils.utf8ByteLength(name) + 1 + 1;
 		} else if (value instanceof RegExp || isRegExp(value)) return ByteUtils.utf8ByteLength(name) + 1 + 1 + ByteUtils.utf8ByteLength(value.source) + 1 + (value.global ? 1 : 0) + (value.ignoreCase ? 1 : 0) + (value.multiline ? 1 : 0) + 1;
 		else if (value._bsontype === "BSONRegExp") return ByteUtils.utf8ByteLength(name) + 1 + 1 + ByteUtils.utf8ByteLength(value.pattern) + 1 + ByteUtils.utf8ByteLength(value.options) + 1;
 		else {
+			if (path.has(value)) throw new BSONError("Cannot convert circular structure to BSON");
 			objectStack.push({
-				obj: value,
-				ignoreUndefined
+				object: value,
+				ignoreUndefined,
+				exit: false
 			});
 			return ByteUtils.utf8ByteLength(name) + 1 + 1;
 		}
