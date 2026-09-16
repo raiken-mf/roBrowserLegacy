@@ -278958,7 +278958,7 @@ function loadTextures(gl, textureSet, effect) {
 					return;
 				}
 				cache.textures[index - 1] = texture;
-				if (cache.textures.every(Boolean)) {
+				if (cache.textures.filter(Boolean).length === TEXTURE_COUNT) {
 					cache.ready = true;
 					cache.waiters.forEach((waiter) => {
 						waiter.textures = cache.textures;
